@@ -107,11 +107,15 @@ export default function App() {
     // Explicitly play music on user interaction
     if (audioRef.current) {
       audioRef.current.currentTime = 0;
-      audioRef.current.volume = 0.4;
+      audioRef.current.volume = 0.5;
       audioRef.current.muted = false;
       const playPromise = audioRef.current.play();
       if (playPromise !== undefined) {
-        playPromise.catch(e => console.log("Audio play prevented:", e));
+        playPromise.catch(e => {
+          console.log("Audio play prevented:", e);
+          // If auto-play failed, we can't do much until next interaction
+          // User will likely click something else later
+        });
       }
     }
   };
@@ -120,9 +124,15 @@ export default function App() {
     if (gameState !== 'playing') return;
     if (!isPaused) {
       pauseStartTimeRef.current = Date.now();
+      // Ensure audio pauses immediately
+      if (audioRef.current) audioRef.current.pause();
     } else {
       const pauseDuration = Date.now() - pauseStartTimeRef.current;
       startTimeRef.current += pauseDuration;
+      // Ensure audio resumes
+      if (!isMuted && audioRef.current) {
+        audioRef.current.play().catch(() => {});
+      }
     }
     setIsPaused(prev => !prev);
   };
@@ -252,14 +262,16 @@ export default function App() {
       {/* Background - Sky and Hills */}
       <audio 
         ref={audioRef}
-        src="https://cdn.pixabay.com/audio/2022/01/18/audio_d0a13f69d2.mp3" 
+        src="https://cdn.pixabay.com/audio/2021/11/25/audio_b28203d6d0.mp3" 
         loop
         preload="auto"
+        crossOrigin="anonymous"
       />
       <audio 
         ref={splashAudioRef}
         src="https://cdn.pixabay.com/audio/2021/08/04/audio_097f4749f7.mp3"
         preload="auto"
+        crossOrigin="anonymous"
       />
       <div className="absolute inset-0 bg-[#B3E5FC] h-[60%] overflow-hidden pointer-events-none">
         <div className="absolute top-10 right-16 w-16 lg:w-24 h-16 lg:h-24 bg-[#FACC15] rounded-full shadow-[0_0_40px_rgba(250,204,21,0.6)] animate-pulse" />
