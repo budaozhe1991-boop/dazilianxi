@@ -18,7 +18,7 @@ const ASSETS = {
 const WORDS_DATA = [
   { text: '佩奇', pinyin: 'peiqi', english: 'peppa' },
   { text: '乔治', pinyin: 'qiaozhi', english: 'george' },
-  { text: '恐龙', pinyin: 'konglong', english: 'dinosaur' },
+  { text: '恐龙', pinyin: 'dinosaur', english: 'dino' },
   { text: '猪妈妈', pinyin: 'zhumama', english: 'mummy' },
   { text: '猪爸爸', pinyin: 'zhubaba', english: 'daddy' },
   { text: '泥坑', pinyin: 'nikeng', english: 'puddle' },
@@ -28,7 +28,7 @@ const WORDS_DATA = [
   { text: '小山', pinyin: 'xiaoshan', english: 'hill' },
   { text: '房子', pinyin: 'fangzi', english: 'house' },
   { text: '小鸭子', pinyin: 'xiaoyazi', english: 'duck' },
-  { text: '自行车', pinyin: 'zixingche', english: 'bicycle' },
+  { text: '自行车', pinyin: 'zixingche', english: 'bike' },
   { text: '气球', pinyin: 'qiqiu', english: 'balloon' },
   { text: '蛋糕', pinyin: 'dangao', english: 'cake' },
   { text: '派对', pinyin: 'paidui', english: 'party' },
@@ -38,7 +38,7 @@ const WORDS_DATA = [
   { text: '校车', pinyin: 'xiaoche', english: 'bus' },
   { text: '野餐', pinyin: 'yecan', english: 'picnic' },
   { text: '苹果', pinyin: 'pingguo', english: 'apple' },
-  { text: '草莓', pinyin: 'caomei', english: 'strawberry' },
+  { text: '草莓', pinyin: 'caomei', english: 'berry' },
   { text: '星星', pinyin: 'xingxing', english: 'stars' },
   { text: '医生', pinyin: 'yisheng', english: 'doctor' },
   { text: '消防车', pinyin: 'xiaofangche', english: 'engine' },
@@ -58,6 +58,7 @@ interface FallingWord {
 export default function App() {
   const [gameState, setGameState] = useState<'start' | 'playing' | 'ended'>('start');
   const [gameMode, setGameMode] = useState<'chinese' | 'english'>('chinese');
+  const [isPaused, setIsPaused] = useState(false);
   const [words, setWords] = useState<FallingWord[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [score, setScore] = useState(0);
@@ -69,9 +70,11 @@ export default function App() {
   const [mistakes, setMistakes] = useState(0);
   const [lastSplash, setLastSplash] = useState<{ x: number, y: number } | null>(null);
   const [speedSetting, setSpeedSetting] = useState(0.8); // Default to a slower setting
-  const [isMuted, setIsMuted] = useState(true);
+  const [isMuted, setIsMuted] = useState(false); // Default to unmuted as per user's music request
 
+  const splashAudioRef = useRef<HTMLAudioElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
+  const pauseStartTimeRef = useRef<number>(0);
   const gameLoopRef = useRef<number>(null);
   const lastTimeRef = useRef<number>(0);
   const nextWordTimeRef = useRef<number>(0);
@@ -88,6 +91,7 @@ export default function App() {
 
   const startGame = () => {
     setGameState('playing');
+    setIsPaused(false);
     setWords([]);
     setScore(0);
     setProgress(0);
@@ -100,33 +104,75 @@ export default function App() {
     startTimeRef.current = Date.now();
     nextWordTimeRef.current = 0;
     
-    // Play music when game starts if not muted
-    if (!isMuted && audioRef.current) {
-      audioRef.current.play().catch(e => console.log("Audio play prevented:", e));
+    // Explicitly play music on user interaction
+    if (audioRef.current) {
+      audioRef.current.currentTime = 0;
+      audioRef.current.volume = 0.4;
+      audioRef.current.muted = false;
+      const playPromise = audioRef.current.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(e => console.log("Audio play prevented:", e));
+      }
+    }
+  };
+
+  const togglePause = () => {
+    if (gameState !== 'playing') return;
+    if (!isPaused) {
+      pauseStartTimeRef.current = Date.now();
+    } else {
+      const pauseDuration = Date.now() - pauseStartTimeRef.current;
+      startTimeRef.current += pauseDuration;
+    }
+    setIsPaused(prev => !prev);
+  };
+
+  const exitGame = () => {
+    setGameState('start');
+    setWords([]);
+    setIsPaused(false);
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.currentTime = 0;
     }
   };
 
   const endGame = () => {
     setGameState('ended');
     if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
+    if (audioRef.current) {
+      audioRef.current.pause();
+    }
   };
 
   const handleInputChange = (e: ChangeEvent<HTMLInputElement>) => {
-    const value = e.target.value.toLowerCase().trim();
-    setInputValue(e.target.value);
+    const rawValue = e.target.value;
+    const value = rawValue.toLowerCase().trim();
+    setInputValue(rawValue);
 
-    // Check if any word matches
-    const matchedWord = words.find(w => 
-      gameMode === 'chinese' ? w.pinyin === value : w.english === value
-    );
+    // Check if any word matches tip or text
+    const matchedWord = words.find(w => {
+      const pinyin = w.pinyin.toLowerCase();
+      const english = w.english.toLowerCase();
+      const text = w.text;
+      if (gameMode === 'chinese') {
+        return value === pinyin || value === text;
+      } else {
+        return value === english || value === text;
+      }
+    });
 
     if (matchedWord) {
+      if (!isMuted && splashAudioRef.current) {
+        splashAudioRef.current.currentTime = 0;
+        splashAudioRef.current.play().catch(() => {});
+      }
       setWords(prev => prev.filter(w => w.id !== matchedWord.id));
       setInputValue('');
       setScore(s => s + matchedWord.text.length * 20);
       setTotalTyped(t => t + (gameMode === 'chinese' ? matchedWord.pinyin.length : matchedWord.english.length));
       setProgress(p => {
-        const next = p + 4; // About 25 words to finish
+        const next = p + 4;
         if (next >= 100) {
           setTimeout(endGame, 500);
           return 100;
@@ -136,23 +182,22 @@ export default function App() {
       setLastSplash({ x: matchedWord.x, y: matchedWord.y });
       setTimeout(() => setLastSplash(null), 600);
 
-      // Level up logic
       if (score > level * 800) {
         setLevel(l => Math.min(l + 1, 10));
       }
     }
   };
 
-  // Handle audio play/pause
+   // Handle audio play/pause
   useEffect(() => {
     if (audioRef.current) {
-      if (isMuted) {
+      if (isMuted || gameState !== 'playing' || isPaused) {
         audioRef.current.pause();
       } else {
         audioRef.current.play().catch(e => console.log("Audio play prevented:", e));
       }
     }
-  }, [isMuted]);
+  }, [isMuted, gameState, isPaused]);
 
   // Game Loop
   useEffect(() => {
@@ -162,33 +207,35 @@ export default function App() {
       const dt = time - lastTimeRef.current;
       lastTimeRef.current = time;
 
-      // Update word positions
-      setWords(prev => {
-        const updated = prev.map(w => ({ ...w, y: w.y + w.speed * (dt / 16) }));
-        // Check if any word touched the bottom
-        if (updated.some(w => w.y > 82)) {
-          setMistakes(m => m + 1);
-          return updated.filter(w => w.y <= 82);
+      if (!isPaused) {
+        // Update word positions
+        setWords(prev => {
+          const updated = prev.map(w => ({ ...w, y: w.y + w.speed * (dt / 16) }));
+          // Check if any word touched the bottom
+          if (updated.some(w => w.y > 82)) {
+            setMistakes(m => m + 1);
+            return updated.filter(w => w.y <= 82);
+          }
+          return updated;
+        });
+
+        // Spawn new words
+        if (time > nextWordTimeRef.current) {
+          spawnWord();
+          // Higher speedSetting means shorter interval
+          const baseInterval = Math.max(3000, 6000 - level * 300);
+          const interval = baseInterval / speedSetting;
+          nextWordTimeRef.current = time + interval;
         }
-        return updated;
-      });
 
-      // Spawn new words
-      if (time > nextWordTimeRef.current) {
-        spawnWord();
-        // Higher speedSetting means shorter interval
-        const baseInterval = Math.max(3000, 6000 - level * 300);
-        const interval = baseInterval / speedSetting;
-        nextWordTimeRef.current = time + interval;
-      }
-
-      // Update WPM & Accuracy
-      const timeElapsed = (Date.now() - startTimeRef.current) / 60000; // in minutes
-      if (timeElapsed > 0.05) {
-        setWpm(Math.round((totalTyped) / timeElapsed));
-      }
-      if (totalTyped + mistakes > 0) {
-        setAccuracy(Math.round((totalTyped / (totalTyped + mistakes)) * 100));
+        // Update WPM & Accuracy
+        const timeElapsed = (Date.now() - startTimeRef.current) / 60000; // in minutes
+        if (timeElapsed > 0.05) {
+          setWpm(Math.round((totalTyped) / timeElapsed));
+        }
+        if (totalTyped + mistakes > 0) {
+          setAccuracy(Math.round((totalTyped / (totalTyped + mistakes)) * 100));
+        }
       }
 
       gameLoopRef.current = requestAnimationFrame(loop);
@@ -198,64 +245,76 @@ export default function App() {
     return () => {
       if (gameLoopRef.current) cancelAnimationFrame(gameLoopRef.current);
     };
-  }, [gameState, spawnWord, level, totalTyped, mistakes]);
+  }, [gameState, spawnWord, level, totalTyped, mistakes, isPaused]);
 
   return (
-    <div className="min-h-screen bg-[#B3E5FC] font-sans selection:bg-pink-200 overflow-hidden relative">
+    <div className="min-h-[100dvh] h-[100dvh] bg-[#B3E5FC] font-sans selection:bg-pink-200 overflow-hidden relative flex flex-col">
       {/* Background - Sky and Hills */}
       <audio 
         ref={audioRef}
-        src="https://www.chosic.com/wp-content/uploads/2021/04/Playful-Music.mp3" 
+        src="https://cdn.pixabay.com/audio/2022/01/18/audio_d0a13f69d2.mp3" 
         loop
+        preload="auto"
       />
-      <div className="absolute inset-0 bg-[#B3E5FC] h-[60vh] overflow-hidden">
-        <div className="absolute top-10 right-16 w-24 h-24 bg-[#FACC15] rounded-full shadow-[0_0_40px_rgba(250,204,21,0.6)] animate-pulse" />
+      <audio 
+        ref={splashAudioRef}
+        src="https://cdn.pixabay.com/audio/2021/08/04/audio_097f4749f7.mp3"
+        preload="auto"
+      />
+      <div className="absolute inset-0 bg-[#B3E5FC] h-[60%] overflow-hidden pointer-events-none">
+        <div className="absolute top-10 right-16 w-16 lg:w-24 h-16 lg:h-24 bg-[#FACC15] rounded-full shadow-[0_0_40px_rgba(250,204,21,0.6)] animate-pulse" />
         
-        <div className="absolute top-12 left-20 w-40 h-12 bg-white rounded-full opacity-90" />
-        <div className="absolute top-16 left-32 w-28 h-12 bg-white rounded-full opacity-90" />
-        
-        <div className="absolute top-24 right-40 w-32 h-10 bg-white rounded-full opacity-80" />
-        <div className="absolute top-28 right-52 w-20 h-10 bg-white rounded-full opacity-80" />
+        <div className="absolute top-12 left-20 w-32 lg:w-40 h-8 lg:h-12 bg-white rounded-full opacity-90" />
+        <div className="absolute top-16 left-32 w-24 lg:w-28 h-8 lg:h-12 bg-white rounded-full opacity-90" />
       </div>
 
       {/* Rolling Green Hill */}
-      <div className="absolute bottom-[-150px] left-[-10%] w-[120%] h-[450px] bg-[#7CC04B] rounded-[100%] border-t-8 border-[#6BA840]"></div>
+      <div className="absolute bottom-[-150px] left-[-10%] w-[120%] h-[400px] lg:h-[450px] bg-[#7CC04B] rounded-[100%] border-t-8 border-[#6BA840] pointer-events-none"></div>
 
       {/* House on the Hill */}
       <motion.div 
-        className="absolute bottom-[200px] right-[50px] w-48 z-10"
+        className="absolute bottom-[20%] right-[3%] w-24 lg:w-48 z-10 pointer-events-none opacity-50 lg:opacity-100"
         initial={{ opacity: 0, scale: 0.8 }}
-        animate={{ opacity: 1, scale: 1 }}
+        animate={{ opacity: 0.7, scale: 1 }}
       >
         <img src={ASSETS.house} alt="Peppa's House" className="w-full drop-shadow-xl" referrerPolicy="no-referrer" />
-        <div className="absolute -top-12 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-white/80 px-3 py-1 rounded-full text-pink-500 font-bold border-2 border-pink-200">
-          <House className="w-4 h-4" />
-          <span>佩奇的家</span>
-        </div>
       </motion.div>
 
       {/* Main Game Content */}
-      <div className="relative z-30 container mx-auto px-4 h-screen flex flex-col">
+      <div className="relative z-30 container mx-auto px-2 lg:px-4 h-full flex flex-col overflow-hidden max-w-5xl">
         
         {/* Header Stats - Compact on smaller screens */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 lg:gap-6 py-4 lg:py-8 shrink-0 relative">
-          <StatCard icon={<Timer className="text-white w-5 h-5 lg:w-6 lg:h-6" />} label="打字速度" value={`${wpm} 字/分`} theme="brown" />
-          <StatCard icon={<Target className="text-white w-5 h-5 lg:w-6 lg:h-6" />} label="难度等级" value={level} theme="red" />
-          <StatCard icon={<Award className="text-white w-5 h-5 lg:w-6 lg:h-6" />} label="游戏得分" value={score} theme="brown" />
-          <StatCard icon={<Target className="text-[#FF4D4D] w-5 h-5 lg:w-6 lg:h-6" />} label="准确率" value={`${accuracy}%`} theme="white" />
+        <div className="grid grid-cols-2 lg:grid-cols-5 gap-2 lg:gap-4 py-2 lg:py-6 shrink-0 z-50">
+          <StatCard icon={<Timer className="text-white w-4 h-4 lg:w-6 lg:h-6" />} label="速度" value={wpm} unit="个/分" theme="brown" />
+          <StatCard icon={<Target className="text-white w-4 h-4 lg:w-6 lg:h-6" />} label="等级" value={level} theme="red" />
+          <StatCard icon={<Award className="text-white w-4 h-4 lg:w-6 lg:h-6" />} label="得分" value={score} theme="brown" />
+          <StatCard icon={<Target className="text-[#FF4D4D] w-4 h-4 lg:w-6 lg:h-6" />} label="准确率" value={`${accuracy}%`} theme="white" />
           
-          {/* Audio Toggle Button */}
-          <button 
-            onClick={() => setIsMuted(!isMuted)}
-            className="absolute -top-2 -right-2 lg:top-8 lg:-right-8 p-3 bg-white rounded-full shadow-lg border-2 border-pink-200 z-50 text-[#FF4D4D] hover:scale-110 transition-transform active:scale-95"
-            title={isMuted ? "开启音乐" : "关闭音乐"}
-          >
-            {isMuted ? <VolumeX className="w-6 h-6" /> : <Volume2 className="w-6 h-6" />}
-          </button>
+          <div className="col-span-2 lg:col-span-1 flex gap-2">
+            <button 
+              onClick={() => {
+                setIsMuted(!isMuted);
+                if (isMuted && audioRef.current) {
+                   audioRef.current.play().catch(() => {});
+                }
+              }}
+              className="flex-1 lg:flex-none p-2 lg:p-4 bg-white rounded-2xl shadow-lg border-2 border-pink-200 text-[#FF4D4D] hover:scale-105 transition-transform active:scale-95 flex items-center justify-center cursor-pointer"
+              title={isMuted ? "开启音乐" : "关闭音乐"}
+            >
+              {isMuted ? <VolumeX className="w-5 h-5 lg:w-6 lg:h-6" /> : <Volume2 className="w-5 h-5 lg:w-6 lg:h-6" />}
+            </button>
+            <button 
+              onClick={exitGame}
+              className="flex-1 lg:flex-none p-2 lg:p-4 bg-red-500 rounded-2xl shadow-lg border-2 border-red-200 text-white hover:scale-105 transition-transform active:scale-95 flex items-center justify-center font-bold cursor-pointer"
+              title="退出游戏"
+            >
+              退出
+            </button>
+          </div>
         </div>
 
         {/* Game Area */}
-        <div className="flex-1 relative border-4 border-white/40 rounded-[40px] bg-white/10 backdrop-blur-sm overflow-hidden mb-4 min-h-[300px]">
+        <div className="flex-1 relative border-2 lg:border-4 border-white/40 rounded-[30px] lg:rounded-[40px] bg-white/10 backdrop-blur-sm overflow-hidden mb-2">
           
           {gameState === 'start' && (
             <div className="absolute inset-0 flex flex-col items-center justify-start lg:justify-center text-center p-4 lg:p-8 bg-white/60 backdrop-blur-lg z-50 overflow-y-auto">
@@ -327,6 +386,33 @@ export default function App() {
 
           {gameState === 'playing' && (
             <>
+              {/* Overlay for Pause */}
+              {isPaused && (
+                <div className="absolute inset-0 z-40 bg-black/60 backdrop-blur-md flex flex-col items-center justify-center text-white">
+                  <motion.div 
+                    initial={{ scale: 0.8, opacity: 0 }}
+                    animate={{ scale: 1, opacity: 1 }}
+                    className="bg-white p-10 rounded-[40px] shadow-2xl flex flex-col items-center border-8 border-pink-300"
+                  >
+                    <h2 className="text-5xl lg:text-7xl font-black mb-8 italic text-[#FF4D4D] tracking-tighter">游戏已暂停</h2>
+                    <div className="flex gap-6 w-full">
+                      <button 
+                        onClick={togglePause}
+                        className="flex-1 bg-[#7CC04B] hover:bg-[#6BA840] text-white px-8 py-4 rounded-full text-2xl font-black shadow-[0_6px_0_rgba(101,156,61,1)] transition-all active:translate-y-1 active:shadow-none cursor-pointer"
+                      >
+                        继续
+                      </button>
+                      <button 
+                        onClick={exitGame}
+                        className="flex-1 bg-red-500 hover:bg-red-600 text-white px-8 py-4 rounded-full text-2xl font-black shadow-[0_6px_0_rgba(185,28,28,1)] transition-all active:translate-y-1 active:shadow-none cursor-pointer"
+                      >
+                        退出
+                      </button>
+                    </div>
+                  </motion.div>
+                </div>
+              )}
+
               {/* Falling Words */}
               <AnimatePresence>
                 {words.map((word) => (
@@ -343,10 +429,10 @@ export default function App() {
                     exit={{ scale: 1.5, opacity: 0 }}
                   >
                     <span className="text-sm font-black text-[#8D6E63] uppercase tracking-widest mb-1">
-                      {gameMode === 'chinese' ? word.pinyin : word.english}
+                      {gameMode === 'chinese' ? word.pinyin : word.text}
                     </span>
                     <span className="text-4xl font-black text-[#FF4D4D] tracking-widest italic">
-                      {word.text}
+                      {gameMode === 'chinese' ? word.text : word.english}
                     </span>
                   </motion.div>
                 ))}
@@ -427,25 +513,34 @@ export default function App() {
         </div>
 
         {/* Input Bar Section - Managed position */}
-        <div className="h-32 lg:h-48 flex items-center justify-center shrink-0 mb-4">
+        <div className="h-32 lg:h-48 flex items-center justify-center shrink-0 mb-4 px-4">
           {gameState === 'playing' ? (
-            <div className="max-w-3xl mx-auto w-full relative z-40">
-              <div className="relative group scale-90 lg:scale-100">
-                <input
-                  autoFocus
-                  type="text"
-                  value={inputValue}
-                  onChange={handleInputChange}
-                  className="w-full bg-white border-4 lg:border-8 border-[#8D6E63] rounded-full py-4 lg:py-8 px-10 lg:px-14 text-2xl lg:text-6xl font-black text-[#8D6E63] outline-none shadow-2xl placeholder:text-gray-200 transition-all focus:scale-[1.02]"
-                  placeholder="点击这里输入文字..."
-                />
-                <div className="absolute right-4 lg:right-10 top-1/2 -translate-y-1/2 w-10 h-10 lg:w-16 lg:h-16 bg-[#FF4D4D] rounded-full flex items-center justify-center text-white text-xl lg:text-3xl font-bold shadow-lg">
-                  ↵
+            <div className="max-w-3xl mx-auto w-full relative z-40 flex flex-col gap-4">
+              <div className="flex gap-4">
+                <div className="relative flex-1 group scale-90 lg:scale-100">
+                  <input
+                    autoFocus
+                    disabled={isPaused}
+                    type="text"
+                    value={inputValue}
+                    onChange={handleInputChange}
+                    className="w-full bg-white border-4 lg:border-8 border-[#8D6E63] rounded-full py-4 lg:py-8 px-10 lg:px-14 text-2xl lg:text-6xl font-black text-[#8D6E63] outline-none shadow-2xl placeholder:text-gray-200 transition-all focus:scale-[1.02] disabled:opacity-50"
+                    placeholder="点击这里输入文字..."
+                  />
+                  <div className="absolute right-4 lg:right-10 top-1/2 -translate-y-1/2 w-10 h-10 lg:w-16 lg:h-16 bg-[#FF4D4D] rounded-full flex items-center justify-center text-white text-xl lg:text-3xl font-bold shadow-lg">
+                    ↵
+                  </div>
                 </div>
+                <button 
+                  onClick={togglePause}
+                  className="bg-[#7CC04B] text-white px-6 lg:px-8 rounded-full font-black text-xl lg:text-2xl shadow-lg border-2 border-[#6BA840] hover:scale-105 transition-transform"
+                >
+                  {isPaused ? '继续' : '暂停'}
+                </button>
               </div>
               
               {/* Progress Bar - Integrated */}
-              <div className="mt-4 px-8 scale-90 lg:scale-100">
+              <div className="mt-0 px-4 lg:px-8 scale-90 lg:scale-100">
                 <div className="flex justify-between items-end mb-1 text-[#FF4D4D] font-black uppercase tracking-widest text-[10px] lg:text-sm">
                   <span>回家的距离</span>
                   <span>{progress}%</span>
@@ -480,7 +575,7 @@ export default function App() {
   );
 }
 
-function StatCard({ icon, label, value, theme }: { icon: ReactNode, label: string, value: string | number, theme: 'brown' | 'red' | 'white' }) {
+function StatCard({ icon, label, value, theme, unit }: { icon: ReactNode, label: string, value: string | number, theme: 'brown' | 'red' | 'white', unit?: string }) {
   const styles = {
     brown: "bg-[#8D6E63] border-[#D7CCC8] text-white",
     red: "bg-[#FF4D4D] border-white text-white",
@@ -488,10 +583,10 @@ function StatCard({ icon, label, value, theme }: { icon: ReactNode, label: strin
   };
 
   return (
-    <div className={`${styles[theme]} p-6 rounded-[30px] border-4 shadow-xl flex flex-col items-center justify-center text-center transition-transform hover:scale-105 min-w-[140px]`}>
-      <div className="mb-2 opacity-90">{icon}</div>
-      <div className={`text-xs uppercase font-black tracking-[0.2em] mb-1 ${theme === 'white' ? 'text-[#FF4D4D]/60' : 'text-white/60'}`}>{label}</div>
-      <div className="text-3xl font-black">{value}</div>
+    <div className={`${styles[theme]} p-2 lg:p-4 rounded-2xl lg:rounded-[30px] border-2 lg:border-4 shadow-lg flex flex-col items-center justify-center text-center transition-transform hover:scale-105`}>
+      <div className="mb-0.5 lg:mb-1 opacity-90">{icon}</div>
+      <div className={`text-[8px] lg:text-xs uppercase font-black tracking-[0.1em] lg:tracking-[0.2em] ${theme === 'white' ? 'text-[#FF4D4D]/60' : 'text-white/60'}`}>{label}</div>
+      <div className="text-sm lg:text-3xl font-black">{value}{unit && <span className="text-[10px] lg:text-sm ml-0.5 lg:ml-1 opacity-70 font-bold">{unit}</span>}</div>
     </div>
   );
 }
